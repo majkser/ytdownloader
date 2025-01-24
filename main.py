@@ -6,9 +6,11 @@ from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.checkbox import CheckBox
+from kivy.clock import Clock
 import yt_dlp
 import os
 from pathlib import Path
+import threading
 
 class Downloader(App):
     def build(self):
@@ -18,6 +20,9 @@ class Downloader(App):
         self.window.pos_hint = {"center_x": 0.5, "center_y": 0.5}
         self.window.spacing = 20
 
+        self.progress_text = Label(text="", size_hint=(1, 0.3), font_size=20)
+        self.window.add_widget(self.progress_text)
+
         self.format = "audio"
         self.download_path = os.path.join(Path.home(), "Downloads", "yt_downloads")
         os.makedirs(self.download_path, exist_ok=True)
@@ -25,6 +30,7 @@ class Downloader(App):
         self.common_opts = {
             'outtmpl': os.path.join(self.download_path, '%(title)s.%(ext)s'),
             'encoding': 'utf-8',
+            'progress_hooks': [self.progress_hook],
         }
         
         self.vid_and_sound_opts = {
@@ -76,6 +82,21 @@ class Downloader(App):
 
         return self.window
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_progress = ""
+
+    def update_progress(self, dt):
+        self.progress_text.text = self.current_progress
+
+    def progress_hook(self, d):
+        if d['status'] == 'finished':
+            self.current_progress = "Download completed"
+            Clock.schedule_once(self.update_progress)
+        elif d['status'] == 'downloading':
+            self.current_progress = f"Downloading: {d.get('_percent_str', '0%')}"
+            Clock.schedule_once(self.update_progress)
+
     def on_checkbox_change(self, checkbox, value):
         if value:
             if checkbox == self.radio_audio:
@@ -93,17 +114,21 @@ class Downloader(App):
             self.url_text.text = "Please enter a URL"
             return
 
-        self.url_text.text = "Starting download..."
+        self.current_percent = 0
+        self.progress_text.text = ""
         self.button.disabled = True
 
-        try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                ydl.download([self.url.text])
-                self.url_text.text = f"Saved to: {self.download_path}"
-        except Exception as e:
-            self.url_text.text = f"Error: {str(e)}"
-        finally:
-            self.button.disabled = False
+        def download_thread():
+            try:
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                    ydl.download([self.url.text])
+                    Clock.schedule_once(lambda dt: setattr(self.url_text, 'text', f"Saved to: {self.download_path}"))
+            except Exception as e:
+                Clock.schedule_once(lambda dt: setattr(self.url_text, 'text', f"Error: {str(e)}"))
+            finally:
+                Clock.schedule_once(lambda dt: setattr(self.button, 'disabled', False))
+        
+        threading.Thread(target=download_thread, daemon=True).start()
 
 if __name__ == "__main__":
     Downloader().run()
